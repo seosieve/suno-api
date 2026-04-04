@@ -882,6 +882,15 @@ class SunoApi {
 
     logger.info('Triggering the CAPTCHA');
 
+    // Dismiss cookie consent banner (OneTrust)
+    try {
+      await page.locator('#onetrust-accept-btn-handler').click({ timeout: 3000 });
+      logger.info('Cookie consent banner dismissed');
+      await sleep(1);
+    } catch(e) {
+      logger.info('No cookie consent banner found - continuing');
+    }
+
     // Try multiple methods to close popups
     try {
       logger.info('Attempting to close popup with getByLabel...');
@@ -967,6 +976,24 @@ class SunoApi {
         });
       });
     });
+
+    // Wait for Cloudflare Turnstile to complete (may cause page reload)
+    try {
+      logger.info('Waiting for Cloudflare Turnstile to complete...');
+      await page.waitForLoadState('networkidle', { timeout: 15000 });
+      logger.info('Page settled after Turnstile');
+    } catch(e) {
+      logger.info('Turnstile wait timed out - continuing anyway');
+    }
+
+    // If page navigated due to Turnstile, wait for it to stabilize
+    try {
+      await page.waitForURL('**/create**', { timeout: 10000 });
+      await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+      logger.info('On create page, DOM loaded');
+    } catch(e) {
+      logger.info('URL/DOM wait issue - continuing');
+    }
 
     // Find and fill the textarea - try multiple selectors
     logger.info('Looking for song description textarea...');
