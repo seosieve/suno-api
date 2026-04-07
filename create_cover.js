@@ -8,9 +8,42 @@
 
 const path = require("path");
 const fs = require("fs");
+const { spawnSync } = require("child_process");
+
+// caffeinate 자동 적용 (잠자기 방지)
+if (!process.env.CAFFEINATED) {
+  process.env.CAFFEINATED = "1";
+  const r = spawnSync("caffeinate", ["-dims", process.execPath, ...process.argv.slice(1)], { stdio: "inherit" });
+  process.exit(r.status || 0);
+}
 const { SUNO_URL, launchAndLogin, uploadAudio, deleteSong, handleCaptcha } = require("./lib/browser");
 
-const STYLE_TEXT = `lofi piano cover, chill lo-fi beats, slow tempo, relaxed, ambient, soft retro vibes, instrumental, lush pads, warm synth layers, vinyl crackle, soft brushed drums, gentle hi-hats, dreamy, mellow, ‑vocals, ‑singing, ‑chanting, ‑voice, ‑chorus`;
+function autoDetectPlaylist(targetPath) {
+  // 폴더명에서 _MR/_MR_slow 등 접미사 제거 → 팀명 (예: "SAMSUNG LIONS_MR_slow" → "SAMSUNG LIONS")
+  const teamName = path.basename(targetPath).replace(/_MR(_slow)?$/, "").replace(/_원곡.*$/, "");
+
+  // raw./EP*/loops/{teamName}.png 검색 (가장 최근 EP)
+  const rawDir = "/Users/seosieve/Documents/PlayList/raw.";
+  if (!fs.existsSync(rawDir)) return { name: teamName, cover: null };
+  const eps = fs.readdirSync(rawDir).filter(f => f.startsWith("EP")).sort().reverse();
+  for (const ep of eps) {
+    const cover = path.join(rawDir, ep, "loops", `${teamName}.png`);
+    if (fs.existsSync(cover)) return { name: teamName, cover };
+  }
+  return { name: teamName, cover: null };
+}
+
+function createPlaylist(name, coverPath) {
+  console.log(`\n📋 플레이리스트 생성: ${name}`);
+  const args = [path.join(__dirname, "create_playlist.py"), name];
+  if (coverPath) args.push("--cover", coverPath);
+  const r = spawnSync("python3", args, { stdio: "inherit" });
+  if (r.status !== 0) {
+    console.log("⚠️ 플레이리스트 생성 실패 — 계속 진행");
+  }
+}
+
+const STYLE_TEXT = `lofi piano cover, chill lo-fi beats, slow tempo, relaxed, ambient, soft retro vibes, instrumental, lush pads, warm synth layers, vinyl crackle, soft brushed drums, gentle hi-hats, dreamy, mellow`;
 
 async function main() {
   const args = process.argv.filter(a => !a.startsWith("--"));
@@ -54,6 +87,15 @@ async function main() {
   console.log(`📊 ${files.length}곡\n`);
   files.forEach((f, i) => console.log(`  ${i + 1}. ${path.basename(f)}`));
 
+  // 플레이리스트 자동 생성
+  const detected = autoDetectPlaylist(absTarget);
+  if (detected) {
+    console.log(`\n🔍 자동 감지: ${detected.name} (cover: ${detected.cover ? "✓" : "✗"})`);
+    createPlaylist(detected.name, detected.cover);
+  } else {
+    console.log("\n⚠️ 팀 자동 감지 실패 — 플레이리스트 생성 건너뜀");
+  }
+
   // 브라우저 실행 + 로그인
   const headless = process.argv.includes("--headless");
   const { browser, page } = await launchAndLogin({ headless });
@@ -80,36 +122,27 @@ async function main() {
       console.log("🗑️ 원본 삭제...");
       await deleteSong(page, songName);
 
-      // 3) Lyrics 비우기
+      // 3) Lyrics 비우기 (placeholder 기반)
       console.log("📝 Lyrics 비우기...");
       try {
-        const lyricsClearBtn = page.locator('text=Lyrics').locator('..').locator('button').nth(2);
-        await lyricsClearBtn.click({ timeout: 3000 });
+        await page.locator('textarea[placeholder*="lyrics" i]').first().fill("");
         console.log("✅ Lyrics 비움");
-      } catch (_) {
-        const lyricsArea = page.locator('textarea').first();
-        await lyricsArea.click({ clickCount: 3 });
-        await page.waitForTimeout(300);
-        await page.keyboard.press("Backspace");
-        for (let j = 0; j < 10; j++) {
-          await page.keyboard.press("Meta+a");
-          await page.keyboard.press("Backspace");
-        }
-        console.log("✅ Lyrics 비움");
+      } catch (e) {
+        console.log(`⚠️ Lyrics 비우기 스킵: ${e.message.split('\n')[0]}`);
+      }
+      await page.waitForTimeout(500);
+
+      // 4) Styles 설정
+      console.log("🎨 Styles 설정...");
+      try {
+        await page.locator('textarea[maxlength="1000"]').first().fill(STYLE_TEXT);
+        console.log("✅ Styles 입력 완료");
+      } catch (e) {
+        console.log(`❌ Styles 실패: ${e.message.split('\n')[0]}`);
       }
       await page.waitForTimeout(1000);
 
-      // 3) Styles 설정
-      console.log("🎨 Styles 설정...");
-      const stylesArea = page.locator('textarea').nth(1);
-      await stylesArea.click();
-      await stylesArea.fill("");
-      await page.waitForTimeout(500);
-      await stylesArea.fill(STYLE_TEXT);
-      console.log("✅ Styles 입력 완료");
-      await page.waitForTimeout(1000);
-
-      // 4) More Options + 슬라이더
+      // 5) More Options + 슬라이더
       console.log("⚙️ More Options...");
       const moreOptions = page.locator('text=More Options').first();
       if (await moreOptions.isVisible({ timeout: 3000 })) {
@@ -137,15 +170,17 @@ async function main() {
       await setSlider("Style Influence", 70);
       await setSlider("Audio Influence", 20);
 
-      // 5) Create + 캡차
+      // 6) Create + 캡차 — popup 닫고 force click
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
       console.log("\n🚀 Create...");
-      const createBtn = page.locator('button:has-text("Create")').first();
-      if (await createBtn.isVisible({ timeout: 5000 })) {
-        await createBtn.click();
+      const createBtn = page.locator('button:has-text("Create")').last();
+      try {
+        await createBtn.click({ force: true, timeout: 5000 });
         console.log("✅ Create 클릭");
         await handleCaptcha(page, createBtn);
-      } else {
-        console.log("❌ Create 버튼 없음");
+      } catch (e) {
+        console.log(`❌ Create 클릭 실패: ${e.message.split('\n')[0]}`);
         await page.screenshot({ path: `/tmp/suno_cover_err_${i}.png` });
       }
 
