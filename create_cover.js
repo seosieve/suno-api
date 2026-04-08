@@ -43,7 +43,7 @@ function createPlaylist(name, coverPath) {
   }
 }
 
-const STYLE_TEXT = `lofi piano cover, chill lo-fi beats, slow tempo, relaxed, ambient, soft retro vibes, instrumental, lush pads, warm synth layers, vinyl crackle, soft brushed drums, gentle hi-hats, dreamy, mellow`;
+const STYLE_TEXT = `lofi piano cover, chill lo-fi beats, mid tempo, gently uplifting, warm, soft retro vibes, instrumental, bright pads, shimmering synth layers, soft brushed drums, crisp hi-hats, light bells, airy, softly hopeful`;
 
 async function main() {
   const args = process.argv.filter(a => !a.startsWith("--"));
@@ -118,11 +118,7 @@ async function main() {
       }
       await page.waitForTimeout(2000);
 
-      // 2) 원본 삭제 (업로드 직후, 오른쪽 리스트에서)
-      console.log("🗑️ 원본 삭제...");
-      await deleteSong(page, songName);
-
-      // 3) Lyrics 비우기 (placeholder 기반)
+      // 2) Lyrics 비우기 (placeholder 기반)
       console.log("📝 Lyrics 비우기...");
       try {
         await page.locator('textarea[placeholder*="lyrics" i]').first().fill("");
@@ -185,7 +181,11 @@ async function main() {
       }
 
       console.log("🎶 곡 생성 시작!");
-      await page.waitForTimeout(3000);
+      // 생성이 시작되고 form이 source audio를 확실히 잡은 뒤에 원본 삭제.
+      // (업로드 직후 삭제하면 form audio 참조가 끊겨 커버가 아닌 단일 곡으로 생성되는 레이스가 있었음)
+      await page.waitForTimeout(5000);
+      console.log("🗑️ 원본 삭제...");
+      await deleteSong(page, songName);
 
       // 다음 곡을 위해 create 페이지로
       if (i < files.length - 1) {
